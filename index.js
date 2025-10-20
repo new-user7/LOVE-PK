@@ -68,7 +68,7 @@ const {
 //===================SESSION-AUTH============================
 if (!fs.existsSync(__dirname + '/sessions/creds.json')) {
     if (config.SESSION_ID && config.SESSION_ID.trim() !== "") {
-        const sessdata = config.SESSION_ID.replace("QADEER-AI~", '');
+        const sessdata = config.SESSION_ID.replace("Qadeer~", '');
         try {
             // Decode base64 string
             const decodedData = Buffer.from(sessdata, 'base64').toString('utf-8');
@@ -808,7 +808,7 @@ if (!isReact && config.CUSTOM_REACT === 'true') {
   }
   
   app.get("/", (req, res) => {
-  res.send("QADEER-MD STARTED ✅");
+  res.send("QADEER-AI STARTED ✅");
   });
   app.listen(port, () => console.log(`Server listening on port http://localhost:${port}`));
   setTimeout(() => {
