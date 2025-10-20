@@ -66,51 +66,34 @@ const {
   setInterval(clearTempDir, 5 * 60 * 1000);
   
 //===================SESSION-AUTH============================
-if (!fs.existsSync(__dirname + '/sessions/creds.json')) {
-    if (config.SESSION_ID && config.SESSION_ID.trim() !== "") {
+// FIX 1: Session logic updated to prioritize SESSION_ID and overwrite stale files
+if (config.SESSION_ID && config.SESSION_ID.trim() !== "") {
+    console.log("SESSION_ID found. Forcing rewrite of local session file...");
+    try {
         const sessdata = config.SESSION_ID.replace("Qadeer~", '');
-        try {
-            // Decode base64 string
-            const decodedData = Buffer.from(sessdata, 'base64').toString('utf-8');
-            
-            // Write decoded data to creds.json
-            fs.writeFileSync(__dirname + '/sessions/creds.json', decodedData);
-            console.log("✅ Session loaded from SESSION_ID");
-        } catch (err) {
-            console.error("❌ Error decoding session data:", err);
-            throw err;
+        const decodedData = Buffer.from(sessdata, 'base64').toString('utf-8');
+        
+        // Ensure the sessions directory exists
+        if (!fs.existsSync(__dirname + '/sessions')) {
+            fs.mkdirSync(__dirname + '/sessions');
         }
-    } else {
-        // Agar SESSION_ID nahi hai to pairing system
-        console.log("⚡ No SESSION_ID found → Using Pairing System");
-
-        (async () => {
-            const { state, saveCreds } = await useMultiFileAuthState(__dirname + '/sessions');
-            const sock = makeWASocket({
-                auth: state,
-                printQRInTerminal: false,
-            });
-
-            if (!state.creds?.me) {
-                rl.question("📱 Enter your WhatsApp number with country code: ", async (number) => {
-                    try {
-                        const code = await sock.requestPairingCode(number);
-                        console.log("🔑 Your Pairing Code:", code);
-                        console.log("➡️ Enter this code in WhatsApp to link your bot device.");
-                    } catch (err) {
-                        console.error("❌ Error generating pairing code:", err);
-                    }
-                });
-            }
-
-            sock.ev.on("creds.update", saveCreds);
-            sock.ev.on("connection.update", ({ connection }) => {
-                if (connection === "open") {
-                    console.log("✅ Bot Connected Successfully via Pairing!");
-                }
-            });
-        })();
+        
+        // Write/Overwrite creds.json
+        fs.writeFileSync(__dirname + '/sessions/creds.json', decodedData);
+        console.log("✅ Session loaded/overwritten from SESSION_ID");
+    } catch (err) {
+        console.error("❌ Error decoding or writing session data:", err);
+        console.log("Please generate a new SESSION_ID and set it.");
+        process.exit(1); // Exit if session is bad
     }
+} else if (!fs.existsSync(__dirname + '/sessions/creds.json')) {
+    // No SESSION_ID and no local creds.json
+    console.error("❌ FATAL ERROR: No SESSION_ID found!");
+    console.error("You must provide a SESSION_ID environment variable to run on a server.");
+    console.error("Run locally with QR or Pairing to get a session file if needed.");
+    process.exit(1); // Exit if no session credentials are available
+} else {
+    console.log("✅ No SESSION_ID env var found. Using existing local /sessions/creds.json file.");
 }
 
 const express = require("express");
@@ -125,7 +108,8 @@ const port = process.env.PORT || 9090;
   var { version } = await fetchLatestBaileysVersion()
   
   const conn = makeWASocket({
-          logger: P({ level: 'silent' }),
+          // FIX 2: Changed logger level from 'silent' to 'info' to see errors
+          logger: P({ level: 'info' }),
           printQRInTerminal: false,
           browser: Browsers.macOS("Firefox"),
           syncFullHistory: true,
@@ -138,6 +122,10 @@ const port = process.env.PORT || 9090;
   if (connection === 'close') {
   if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
     connectToWA();
+  } else {
+    console.error("❌ Connection closed: Logged Out. Session is invalid.");
+    console.error("Please delete the /sessions folder and generate a new SESSION_ID.");
+    process.exit(1); // Stop the bot if logged out
   }
   } else if (connection === 'open') {
   console.log('🧬 Installing Plugins')
@@ -151,7 +139,16 @@ const port = process.env.PORT || 9090;
   console.log('Bot connected to whatsapp ✅')
   
   let up = `*Hello there QADEER-AI User! \ud83d\udc4b\ud83c\udffb* \n\n> Simple , Straight Forward But Loaded With Features \ud83c\udf8a, Meet QADEER-AI WhatsApp Bot.\n\n *Thanks for using QADEER-AI \ud83d\udea9* \n\n> Join WhatsApp Channel :- ⤵️\n \nhttps://whatsapp.com/channel/0029VajWxSZ96H4SyQLurV1H \n\n- *YOUR PREFIX:* = ${prefix}\n\nDont forget to give star to repo ⬇️\n\nhttps://github.com/Qadeer-Xtech/QADEER-AI\n\n> © ᴘᴏᴡᴇʀᴇᴅ ʙʏ ǫᴀᴅᴇᴇʀ ᴋʜᴀɴ ❣️ \ud83d\udda4`;
+    
+    // FIX 3: Added .then() and .catch() for error handling on startup message
     conn.sendMessage(conn.user.id, { image: { url: `https://files.catbox.moe/3tihge.jpg` }, caption: up })
+        .then(() => {
+            console.log("✅ Startup message sent successfully to owner.");
+        })
+        .catch((err) => {
+            console.error("❌ FAILED TO SEND STARTUP MESSAGE:", err);
+            console.error("This might be due to a bad session. Please rescan/pair if connection issues persist.");
+        });
   }
   })
   conn.ev.on('creds.update', saveCreds)
@@ -178,10 +175,10 @@ const port = process.env.PORT || 9090;
     mek.message = (getContentType(mek.message) === 'ephemeralMessage') 
     ? mek.message.ephemeralMessage.message 
     : mek.message;
-    console.log("New Message Detected:", JSON.stringify(mek, null, 2));
+    // console.log("New Message Detected:", JSON.stringify(mek, null, 2)); // Note: This is very noisy, uncomment only for deep debugging
   if (config.READ_MESSAGE === 'true') {
     await conn.readMessages([mek.key]);  // Mark message as read
-    console.log(`Marked message from ${mek.key.remoteJid} as read.`);
+    // console.log(`Marked message from ${mek.key.remoteJid} as read.`); // Also noisy
   }
     if(mek.message.viewOnceMessageV2)
     mek.message = (getContentType(mek.message) === 'ephemeralMessage') ? mek.message.ephemeralMessage.message : mek.message
@@ -190,7 +187,8 @@ const port = process.env.PORT || 9090;
     }
   if (mek.key && mek.key.remoteJid === 'status@broadcast' && config.AUTO_STATUS_REACT === "true"){
     const jawadlike = await conn.decodeJid(conn.user.id);
-    const emojis = ['❤️', '💸', '😇', '🍂', '💥', '💯', '🔥', '💫', '💎', '💗', '🤍', '🖤', '👀', '🙌', '🙆', '🚩', '🥰', '💐', '😎', '🤎', '✅', '🫀', '🧡', '😁', '😄', '🌸', '🕊️', '🌷', '⛅', '🌟', '🗿', '🇵🇰', '💜', '💙', '🌝', '🖤', '💚'];
+    const emojis = ['❤️', '💸', '😇', '🍂', '💥', '💯', '🔥', '💫', '💎', '💗', '🤍', '🖤', '👀', '🙌', '🙆', '🚩', '🥰', '💐', '😎', '🤎', '✅', ' Yeh lein poori file. Ise copy karke apni `index.js` mein paste kar dein:
+', '🧡', '😁', '😄', '🌸', '🕊️', '🌷', '⛅', '🌟', '🗿', '🇵🇰', '💜', '💙', '🌝', '🖤', '💚'];
     const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
     await conn.sendMessage(mek.key.remoteJid, {
       react: {
